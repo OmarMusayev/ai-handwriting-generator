@@ -1,0 +1,9 @@
+numpy
+Flask
+gunicorn
+matplotlib
+torch
+torchvision
+flask-sqlalchemy 
+psycopg2-binary
+# cairocffi
