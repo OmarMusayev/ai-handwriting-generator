@@ -1,9 +1,9 @@
-numpy
 Flask
+flask-sqlalchemy
 gunicorn
 matplotlib
+numpy
+psycopg2-binary
+python-dotenv
 torch
 torchvision
-flask-sqlalchemy 
-psycopg2-binary
-# cairocffi
