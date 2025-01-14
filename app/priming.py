@@ -28,7 +28,7 @@ def generate_handwriting(
 ):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     data_path = os.path.join(app_path, "../data/")
-    model_path = "/Users/omar/Desktop/Handwriting-synthesis-master/results/best_model_synthesis.pt"
+    model_path = "/results/best_model_synthesis.pt"
 
 
     # seed = 194

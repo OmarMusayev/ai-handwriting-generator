@@ -19,7 +19,7 @@ def argparser():
     parser.add_argument(
         "--model_path",
         type=Path,
-        default="/Users/omar/Desktop/Handwriting-synthesis-master/results/best_model_synthesis.pt",
+        default="Handwriting-synthesis-master/results/best_model_synthesis.pt",
     )
     parser.add_argument("--save_path", type=Path, default="./results/")
     parser.add_argument("--seq_len", type=int, default=400)
