@@ -344,7 +344,7 @@ def main():
     print(f"Using device: {device}")
 
     # Load data
-    strokes = np.load(os.path.join(args.data_path, "strokes.npy"), allow_pickle=True)
+    strokes = np.load(os.path.join(args.data_path, "strokes.npy"), allow_pickle=True, encoding="bytes")
     with open(os.path.join(args.data_path, "sentences.txt")) as f:
         raw_texts = f.read().splitlines()
 
