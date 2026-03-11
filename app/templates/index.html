@@ -111,6 +111,7 @@
     document.documentElement.setAttribute('data-theme', next);
     localStorage.setItem('hm-theme', next);
     updateBtn(next);
+    if (window.studioRedrawCanvas) window.studioRedrawCanvas();
   };
 })();
 </script>

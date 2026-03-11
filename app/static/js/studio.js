@@ -265,9 +265,34 @@
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
+  // ── Redraw strokes with current ink color (called on theme change) ─────────
+  function redrawStrokes() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!strokes.length) return;
+    ctx.strokeStyle = inkColor();
+    ctx.beginPath();
+    let penDown = false;
+    for (const pt of strokes) {
+      if (!penDown) {
+        ctx.moveTo(pt.x, pt.y);
+        penDown = true;
+      } else {
+        ctx.lineTo(pt.x, pt.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(pt.x, pt.y);
+      }
+      if (pt.eos) penDown = false;
+    }
+  }
+
   // ── Init ──────────────────────────────────────────────────────────────────
   loadStyles();
 
-  // Expose for generate.js
+  // Expose for generate.js and theme toggle
   window.studioGetStyles = () => stylesList;
+  window.studioRedrawCanvas = redrawStrokes;
 })();
