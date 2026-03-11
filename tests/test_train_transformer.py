@@ -1,9 +1,20 @@
 """Tests for TransformerHandwritingDataset and collate_fn (Task 6)."""
+import os
+import tempfile
 import numpy as np
 import torch
 import pytest
 
-from train_transformer import TransformerHandwritingDataset, collate_fn
+from train_transformer import (
+    TransformerHandwritingDataset,
+    collate_fn,
+    get_beta,
+    compute_loss,
+    train_epoch,
+    validation_epoch,
+    save_checkpoint,
+    load_checkpoint,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -207,3 +218,165 @@ def test_collate_fn_masks_are_correct():
         batch["target_strokes_input"][0, 1:tgt1_len, :],
         batch["target_strokes"][0, :tgt1_len - 1, :],
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 7 Tests
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Test 5: get_beta KL annealing schedule
+# ---------------------------------------------------------------------------
+
+def test_get_beta_schedule():
+    assert get_beta(0) == 0.0
+    assert get_beta(19) == 0.0
+    assert get_beta(40) == pytest.approx(0.5)
+    assert get_beta(60) == 1.0
+    assert get_beta(100) == 1.0
+    # Linear midpoint: epoch=20 => 0.0, epoch=60 => 1.0, epoch=40 => 0.5
+    assert get_beta(20) == pytest.approx(0.0)
+    assert get_beta(59) == pytest.approx(39 / 40)
+
+
+# ---------------------------------------------------------------------------
+# Test 6: compute_loss returns finite values
+# ---------------------------------------------------------------------------
+
+def test_compute_loss_returns_finite():
+    batch_size, seq_len = 2, 5
+    torch.manual_seed(0)
+    y_hat = torch.randn(batch_size, seq_len, 121)
+    target = torch.randn(batch_size, seq_len, 3)
+    target[:, :, 0] = torch.randint(0, 2, (batch_size, seq_len)).float()  # eos is 0 or 1
+    mask = torch.ones(batch_size, seq_len)
+    mu = torch.randn(batch_size, 64)
+    logvar = torch.zeros(batch_size, 64)
+    loss, nll, kl = compute_loss(y_hat, target, mask, mu, logvar, beta=1.0)
+    assert torch.isfinite(loss)
+    assert torch.isfinite(nll)
+    assert torch.isfinite(kl)
+
+
+# ---------------------------------------------------------------------------
+# Test 7: train_epoch updates model weights
+# ---------------------------------------------------------------------------
+
+def _make_tiny_dataset(n_items=2, seq_len=10, text_len=5):
+    """Build a minimal dataset for training tests."""
+    rng = np.random.default_rng(42)
+
+    strokes = np.empty(n_items, dtype=object)
+    texts_arr = np.empty(n_items, dtype=object)
+    vocab = list("abcde ")
+    char_to_id = {c: i for i, c in enumerate(vocab)}
+
+    for i in range(n_items):
+        stroke = np.zeros((seq_len, 3), dtype=np.float32)
+        stroke[:, 0] = rng.integers(0, 2, size=seq_len).astype(np.float32)
+        stroke[:, 1:] = rng.standard_normal((seq_len, 2)).astype(np.float32)
+        strokes[i] = stroke
+        texts_arr[i] = np.array(list("abcde")[:text_len])
+
+    train_mean = np.array([0.0, 0.0], dtype=np.float32)
+    train_std = np.array([1.0, 1.0], dtype=np.float32)
+
+    dataset = TransformerHandwritingDataset(
+        strokes=strokes,
+        texts=texts_arr,
+        char_to_id=char_to_id,
+        train_mean=train_mean,
+        train_std=train_std,
+        max_stroke_len=seq_len,
+        split_lo=0.3,
+        split_hi=0.5,
+    )
+    return dataset, char_to_id
+
+
+def test_train_epoch_updates_weights():
+    from models.transformer_synthesis import HandWritingSynthesisTransformer
+    from torch.utils.data import DataLoader
+
+    dataset, char_to_id = _make_tiny_dataset(n_items=2, seq_len=15)
+    loader = DataLoader(dataset, batch_size=2, collate_fn=collate_fn, shuffle=False)
+
+    model = HandWritingSynthesisTransformer(vocab_size=len(char_to_id))
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    # Snapshot weights before
+    before = {k: v.clone() for k, v in model.named_parameters()}
+
+    train_epoch(model, loader, optimizer, device=torch.device("cpu"), beta=0.0)
+
+    # At least some parameters should have changed
+    any_changed = any(
+        not torch.allclose(before[k], v) for k, v in model.named_parameters()
+    )
+    assert any_changed, "Expected at least one parameter to change after train_epoch"
+
+
+# ---------------------------------------------------------------------------
+# Test 8: save/load checkpoint roundtrip
+# ---------------------------------------------------------------------------
+
+def test_save_load_checkpoint_roundtrip():
+    from models.transformer_synthesis import HandWritingSynthesisTransformer
+
+    model = HandWritingSynthesisTransformer(vocab_size=10)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5)
+
+    state = {
+        "epoch": 42,
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict(),
+        "best_val_loss": 3.14,
+        "beta": 0.75,
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ckpt_path = os.path.join(tmpdir, "subdir", "checkpoint.pt")
+        save_checkpoint(state, ckpt_path)
+        assert os.path.exists(ckpt_path)
+
+        # Create fresh model/optimizer/scheduler for loading
+        model2 = HandWritingSynthesisTransformer(vocab_size=10)
+        optimizer2 = torch.optim.Adam(model2.parameters(), lr=1e-3)
+        scheduler2 = torch.optim.lr_scheduler.StepLR(optimizer2, step_size=5)
+
+        epoch, best_val_loss, beta = load_checkpoint(
+            ckpt_path, model2, optimizer2, scheduler2, device=torch.device("cpu")
+        )
+
+    assert epoch == 42
+    assert best_val_loss == pytest.approx(3.14)
+    assert beta == pytest.approx(0.75)
+
+
+# ---------------------------------------------------------------------------
+# Test 9: validation_epoch does not update weights
+# ---------------------------------------------------------------------------
+
+def test_validation_epoch_no_grad():
+    from models.transformer_synthesis import HandWritingSynthesisTransformer
+    from torch.utils.data import DataLoader
+
+    dataset, char_to_id = _make_tiny_dataset(n_items=2, seq_len=15)
+    loader = DataLoader(dataset, batch_size=2, collate_fn=collate_fn, shuffle=False)
+
+    model = HandWritingSynthesisTransformer(vocab_size=len(char_to_id))
+
+    # Snapshot weights before
+    before = {k: v.clone() for k, v in model.named_parameters()}
+
+    val_loss = validation_epoch(model, loader, device=torch.device("cpu"), beta=0.0)
+
+    # No parameters should have changed
+    all_same = all(
+        torch.allclose(before[k], v) for k, v in model.named_parameters()
+    )
+    assert all_same, "validation_epoch should not modify model weights"
+    assert isinstance(val_loss, float)
+    assert np.isfinite(val_loss)

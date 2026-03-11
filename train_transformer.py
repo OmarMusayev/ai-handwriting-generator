@@ -4,12 +4,22 @@ train_transformer.py — Training script for the Transformer + Style VAE handwri
 This module contains:
   - TransformerHandwritingDataset: wraps IAM stroke data with within-sample style/target split
   - collate_fn: pads variable-length sequences and builds teacher-forced inputs
+  - get_beta: KL annealing schedule
+  - compute_loss: per-sample normalised NLL + KL loss
+  - train_epoch: one training epoch with grad clipping
+  - validation_epoch: one validation epoch (no grad)
+  - save_checkpoint / load_checkpoint: checkpoint I/O
 """
 
+import os
 import random
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+
+from utils.model_utils import compute_nll_loss
+from models.transformer_synthesis import HandWritingSynthesisTransformer
 
 
 class TransformerHandwritingDataset(Dataset):
@@ -140,3 +150,162 @@ def collate_fn(batch: list) -> dict:
         "text": text,
         "text_mask": text_mask,
     }
+
+
+# ---------------------------------------------------------------------------
+# KL annealing schedule
+# ---------------------------------------------------------------------------
+
+def get_beta(epoch: int, stage2_start: int = 20, stage2_end: int = 60) -> float:
+    """Return the KL weight β for the given epoch.
+
+    - epoch < stage2_start:                  β = 0.0
+    - stage2_start <= epoch < stage2_end:    β = (epoch - stage2_start) / (stage2_end - stage2_start)
+    - epoch >= stage2_end:                   β = 1.0
+    """
+    if epoch < stage2_start:
+        return 0.0
+    if epoch >= stage2_end:
+        return 1.0
+    return (epoch - stage2_start) / (stage2_end - stage2_start)
+
+
+# ---------------------------------------------------------------------------
+# Loss computation
+# ---------------------------------------------------------------------------
+
+def compute_loss(
+    y_hat: torch.Tensor,          # (batch, seq_len, 121)
+    target_strokes: torch.Tensor,  # (batch, seq_len, 3)
+    target_mask: torch.Tensor,    # (batch, seq_len)  float 1=valid 0=pad
+    mu: torch.Tensor,             # (batch, latent_dim)
+    logvar: torch.Tensor,         # (batch, latent_dim)
+    beta: float,
+) -> tuple:
+    """Return (loss, nll/n, kl/n) where n = total valid timesteps.
+
+    Both nll and kl are normalised by n (total valid positions across the batch),
+    giving a per-token loss that is stable across variable batch sizes.
+    """
+    nll = compute_nll_loss(target_strokes, y_hat, target_mask)
+    kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    n = target_mask.sum().clamp(min=1)
+    loss = (nll + beta * kl) / n
+    return loss, nll / n, kl / n
+
+
+# ---------------------------------------------------------------------------
+# Training loop
+# ---------------------------------------------------------------------------
+
+def train_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    beta: float,
+    grad_clip: float = 1.0,
+) -> float:
+    """Run one full training epoch.
+
+    Returns:
+        Average total loss across all batches.
+    """
+    model.train()
+    total_loss = 0.0
+    num_batches = 0
+
+    for batch in loader:
+        # Move tensors to device
+        style_strokes = batch["style_strokes"].to(device)
+        target_strokes = batch["target_strokes"].to(device)
+        target_mask = batch["target_mask"].to(device)
+        target_strokes_input = batch["target_strokes_input"].to(device)
+        text = batch["text"].to(device)
+        text_mask = batch["text_mask"].to(device)
+
+        optimizer.zero_grad()
+
+        y_hat, mu, logvar = model(
+            target_strokes_input, text, text_mask, style_strokes, use_sampling=True
+        )
+
+        loss, _, _ = compute_loss(y_hat, target_strokes, target_mask, mu, logvar, beta)
+
+        loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        optimizer.step()
+
+        total_loss += loss.item()
+        num_batches += 1
+
+    return total_loss / max(num_batches, 1)
+
+
+# ---------------------------------------------------------------------------
+# Validation loop
+# ---------------------------------------------------------------------------
+
+def validation_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    beta: float,
+) -> float:
+    """Run one full validation epoch (no gradient updates).
+
+    Returns:
+        Average total loss across all batches.
+    """
+    model.eval()
+    total_loss = 0.0
+    num_batches = 0
+
+    with torch.no_grad():
+        for batch in loader:
+            style_strokes = batch["style_strokes"].to(device)
+            target_strokes = batch["target_strokes"].to(device)
+            target_mask = batch["target_mask"].to(device)
+            target_strokes_input = batch["target_strokes_input"].to(device)
+            text = batch["text"].to(device)
+            text_mask = batch["text_mask"].to(device)
+
+            y_hat, mu, logvar = model(
+                target_strokes_input, text, text_mask, style_strokes, use_sampling=True
+            )
+
+            loss, _, _ = compute_loss(y_hat, target_strokes, target_mask, mu, logvar, beta)
+
+            total_loss += loss.item()
+            num_batches += 1
+
+    return total_loss / max(num_batches, 1)
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint helpers
+# ---------------------------------------------------------------------------
+
+def save_checkpoint(state: dict, path: str) -> None:
+    """Save a checkpoint dict to path, creating parent directories as needed."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(state, path)
+
+
+def load_checkpoint(
+    path: str,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: object,
+    device: torch.device,
+) -> tuple:
+    """Load a checkpoint and restore model/optimizer/scheduler state.
+
+    Returns:
+        (epoch, best_val_loss, beta)
+    """
+    checkpoint = torch.load(path, map_location=device)
+    model.load_state_dict(checkpoint["model_state"])
+    optimizer.load_state_dict(checkpoint["optimizer_state"])
+    scheduler.load_state_dict(checkpoint["scheduler_state"])
+    return checkpoint["epoch"], checkpoint["best_val_loss"], checkpoint["beta"]
