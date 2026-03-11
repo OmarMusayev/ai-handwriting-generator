@@ -113,3 +113,6 @@ webroot/
 .env
 *.log
 .worktrees/
+# Claude / Superpowers (local dev only)
+.superpowers/
+docs/superpowers/
