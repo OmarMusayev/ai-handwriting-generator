@@ -1,12 +1,20 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="synth">
 <head>
+<script>
+  (function(){
+    var t = localStorage.getItem('hm-theme');
+    if (t === 'minimal' || t === 'synth') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  })();
+</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hand Magic</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=VT323&family=Share+Tech+Mono&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/main.css">
 </head>
 <body>
@@ -16,6 +24,7 @@
   <header>
     <span class="logo">✦ HAND MAGIC ✦</span>
     <span class="credit">Made by Omar Musayev</span>
+    <button class="btn-theme" id="btn-theme" onclick="toggleTheme()" aria-label="Toggle theme">[ MINIMAL ]</button>
   </header>
 
   <!-- Studio -->
@@ -79,7 +88,52 @@
   <img id="lightbox-img" src="" alt="Generated handwriting">
 </div>
 
+<!-- Theme wipe overlay -->
+<div id="theme-wipe"></div>
+
 <script src="/static/js/studio.js"></script>
 <script src="/static/js/generate.js"></script>
+<script>
+(function () {
+  var btn = document.getElementById('btn-theme');
+  var wipe = document.getElementById('theme-wipe');
+
+  function updateBtn(theme) {
+    btn.textContent = theme === 'synth' ? '[ MINIMAL ]' : '[ ✦ SYNTH ]';
+  }
+
+  // Set button label on load
+  updateBtn(document.documentElement.getAttribute('data-theme') || 'synth');
+
+  window.toggleTheme = function () {
+    var current = document.documentElement.getAttribute('data-theme') || 'synth';
+    var next = current === 'synth' ? 'minimal' : 'synth';
+
+    // Phase 1: wipe sweeps down
+    wipe.className = '';
+    void wipe.offsetWidth; // force reflow
+    wipe.classList.add('wipe-down');
+
+    wipe.addEventListener('animationend', function onDown() {
+      wipe.removeEventListener('animationend', onDown);
+
+      // Swap theme while covered
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('hm-theme', next);
+      updateBtn(next);
+
+      // Phase 2: wipe slides off bottom
+      wipe.className = '';
+      void wipe.offsetWidth;
+      wipe.classList.add('wipe-off');
+
+      wipe.addEventListener('animationend', function onOff() {
+        wipe.removeEventListener('animationend', onOff);
+        wipe.className = '';
+      });
+    });
+  };
+})();
+</script>
 </body>
 </html>

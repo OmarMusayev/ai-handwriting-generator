@@ -481,3 +481,170 @@ input[type="range"] {
 }
 
 section { margin-bottom: 0; }
+
+/* ── Minimal (clean white) theme ──────────────────────────────── */
+[data-theme="minimal"] {
+  --bg:       #ffffff;
+  --grid:     #e5e5e5;
+  --cyan:     #0a0a0a;
+  --magenta:  #555555;
+  --purple:   #333333;
+  --text:     #0a0a0a;
+  --text-dim: #666666;
+  --card-bg:  #f7f7f7;
+  --glow-c:   none;
+  --glow-m:   none;
+}
+
+[data-theme="minimal"] body {
+  font-family: 'Inter', sans-serif;
+}
+
+/* Kill the grid and scanline pseudo-elements */
+[data-theme="minimal"] body::before,
+[data-theme="minimal"] body::after {
+  display: none;
+}
+
+/* Logo: black text, no gradient */
+[data-theme="minimal"] .logo {
+  background: none;
+  -webkit-background-clip: unset;
+  -webkit-text-fill-color: #0a0a0a;
+  background-clip: unset;
+  animation: none;
+  filter: none;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 1.4rem;
+  letter-spacing: 0.02em;
+}
+
+/* Cards: flat white, thin gray border */
+[data-theme="minimal"] .card {
+  border-color: #e0e0e0;
+  box-shadow: none;
+}
+
+[data-theme="minimal"] .card-title {
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #0a0a0a;
+}
+
+/* Buttons: flat bordered */
+[data-theme="minimal"] .btn {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+}
+
+[data-theme="minimal"] .btn:hover {
+  background: #0a0a0a;
+  color: #ffffff;
+  box-shadow: none;
+}
+
+/* Inputs */
+[data-theme="minimal"] input[type="text"],
+[data-theme="minimal"] .text-input {
+  font-family: 'Inter', sans-serif;
+  background: #ffffff;
+  border-color: #d0d0d0;
+}
+
+[data-theme="minimal"] input[type="text"]:focus,
+[data-theme="minimal"] .text-input:focus {
+  box-shadow: none;
+  border-color: #0a0a0a;
+}
+
+/* Canvas */
+[data-theme="minimal"] #draw-canvas {
+  background: #ffffff;
+  border-color: #cccccc;
+  box-shadow: none;
+}
+
+/* Style pills */
+[data-theme="minimal"] .style-pill.active,
+[data-theme="minimal"] .style-pill.selected {
+  border-color: #0a0a0a;
+  color: #0a0a0a;
+  background: rgba(0,0,0,0.05);
+  box-shadow: none;
+}
+
+/* Accent: range slider */
+[data-theme="minimal"] input[type="range"] {
+  accent-color: #0a0a0a;
+}
+
+/* Flash messages */
+[data-theme="minimal"] #flash-msg {
+  box-shadow: none;
+}
+
+/* ── Scanline wipe overlay ────────────────────────────────────── */
+#theme-wipe {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  transform: translateY(-100%);
+  background: repeating-linear-gradient(
+    to bottom,
+    #000 0px,
+    #000 2px,
+    #111 2px,
+    #111 4px
+  );
+}
+
+#theme-wipe.wipe-down {
+  animation: wipeDown 0.3s ease-in forwards;
+}
+
+#theme-wipe.wipe-off {
+  animation: wipeOff 0.3s ease-out forwards;
+}
+
+@keyframes wipeDown {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(0%); }
+}
+
+@keyframes wipeOff {
+  from { transform: translateY(0%); }
+  to   { transform: translateY(100%); }
+}
+
+/* ── Theme toggle button ──────────────────────────────────────── */
+.btn-theme {
+  font-family: 'VT323', monospace;
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+  padding: 0.25rem 0.8rem;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid var(--cyan);
+  background: transparent;
+  color: var(--cyan);
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.btn-theme:hover {
+  background: var(--cyan);
+  color: var(--bg);
+}
+
+[data-theme="minimal"] .btn-theme {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
