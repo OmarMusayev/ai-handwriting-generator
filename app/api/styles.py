@@ -82,7 +82,10 @@ async def save_style(body: SaveStyleRequest, request: Request, response: Respons
     # stroke_data is [[eos, dx, dy], ...] — convert directly to float32 array
     stroke = np.array(body.stroke_data, dtype=np.float32)
     np.save(str(sd / "stroke.npy"), stroke, allow_pickle=True)
-    plot_stroke(stroke, str(sd / "preview.png"))
+    # Flip y for preview: canvas y goes down, matplotlib y goes up
+    preview_stroke = stroke.copy()
+    preview_stroke[:, 2] *= -1
+    plot_stroke(preview_stroke, str(sd / "preview.png"))
 
     meta = {
         "name": next_name,
