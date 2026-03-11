@@ -1,9 +1,7 @@
 # models/transformer_synthesis.py
 import math
-import numpy as np
 import torch
 import torch.nn as nn
-from models.models import sample_from_out_dist
 
 
 class PositionalEncoding(nn.Module):

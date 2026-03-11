@@ -1,7 +1,5 @@
 # tests/test_transformer_model.py
 import torch
-import pytest
-import numpy as np
 from models.transformer_synthesis import TextEncoder, PositionalEncoding
 
 
@@ -29,7 +27,7 @@ def test_text_encoder_output_shape():
 
 
 def test_text_encoder_respects_padding_mask():
-    """Padded positions should not crash and shape is preserved."""
+    """Padded positions should not crash, shape is preserved, and valid positions are not NaN."""
     enc = TextEncoder(vocab_size=77, d_model=256, nhead=8, num_layers=4, ff_dim=512)
     enc.eval()
     text = torch.randint(0, 77, (1, 10))
@@ -38,3 +36,4 @@ def test_text_encoder_respects_padding_mask():
     with torch.no_grad():
         out_half = enc(text, mask_half)
     assert out_half.shape == (1, 10, 256)
+    assert not torch.isnan(out_half[:, :5]).any(), "valid positions should not be NaN"
