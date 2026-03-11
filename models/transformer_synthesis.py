@@ -1,7 +1,9 @@
 # models/transformer_synthesis.py
 import math
+import numpy as np
 import torch
 import torch.nn as nn
+from models.models import sample_from_out_dist
 
 
 class PositionalEncoding(nn.Module):
@@ -199,3 +201,151 @@ class StrokeDecoder(nn.Module):
             memory_key_padding_mask=memory_key_padding_mask,
         )
         return out  # (batch, seq_len, d_model)
+
+
+class MDNHead(nn.Module):
+    """
+    Projects decoder hidden states to MDN output parameters.
+
+    Layout: 1 EOS + 6×20 mixture parameters
+      (mixture weights, μ₁, μ₂, σ₁, σ₂, ρ) = 121 total outputs.
+
+    forward(decoder_hidden) → (batch, seq_len, 121)
+    """
+
+    def __init__(self, d_model: int = 256, output_size: int = 121):
+        super().__init__()
+        self.linear = nn.Linear(d_model, output_size)
+
+    def forward(self, decoder_hidden: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            decoder_hidden: (batch, seq_len, d_model)
+        Returns:
+            (batch, seq_len, 121)
+        """
+        return self.linear(decoder_hidden)
+
+
+class HandWritingSynthesisTransformer(nn.Module):
+    """
+    Top-level Transformer + Style VAE handwriting synthesis model.
+
+    Wraps TextEncoder, StyleVAE, StrokeDecoder, and MDNHead.
+
+    Training:
+        forward(strokes, text, text_mask, style_strokes, use_sampling)
+            → (y_hat, mu, logvar)
+
+    Inference:
+        generate(text, text_mask, style_strokes, bias, max_steps)
+            → numpy array of shape (1, T, 3)
+    """
+
+    def __init__(
+        self,
+        vocab_size: int,
+        d_model: int = 256,
+        nhead: int = 8,
+        text_layers: int = 4,
+        dec_layers: int = 6,
+        ff_dim: int = 512,
+        dropout: float = 0.1,
+        latent_dim: int = 64,
+        stroke_dim: int = 3,
+        output_size: int = 121,
+    ):
+        super().__init__()
+        self.EOS = False
+
+        self.text_encoder = TextEncoder(
+            vocab_size=vocab_size,
+            d_model=d_model,
+            nhead=nhead,
+            num_layers=text_layers,
+            ff_dim=ff_dim,
+            dropout=dropout,
+        )
+        self.style_vae = StyleVAE(
+            input_size=stroke_dim,
+            hidden_size=256,
+            num_layers=2,
+            latent_dim=latent_dim,
+        )
+        self.stroke_decoder = StrokeDecoder(
+            d_model=d_model,
+            nhead=nhead,
+            num_layers=dec_layers,
+            ff_dim=ff_dim,
+            dropout=dropout,
+            latent_dim=latent_dim,
+            stroke_dim=stroke_dim,
+        )
+        self.mdn_head = MDNHead(d_model=d_model, output_size=output_size)
+
+    def forward(
+        self,
+        strokes: torch.Tensor,         # (batch, seq_len, 3) — target strokes (teacher-forced)
+        text: torch.Tensor,            # (batch, text_len) int char indices
+        text_mask: torch.Tensor,       # (batch, text_len) float 1=valid 0=pad
+        style_strokes: torch.Tensor,   # (batch, style_len, 3) — style prefix for VAE
+        use_sampling: bool = True,     # passed to StyleVAE
+    ) -> tuple:
+        """
+        Returns:
+            y_hat:  (batch, seq_len, 121) — MDN outputs
+            mu:     (batch, latent_dim)
+            logvar: (batch, latent_dim)
+        """
+        text_embeddings = self.text_encoder(text, text_mask)            # (batch, text_len, d_model)
+        z, mu, logvar = self.style_vae(style_strokes, use_sampling)     # z: (batch, latent_dim)
+        decoder_out = self.stroke_decoder(strokes, text_embeddings, text_mask, z)  # (batch, seq_len, d_model)
+        y_hat = self.mdn_head(decoder_out)                              # (batch, seq_len, 121)
+        return y_hat, mu, logvar
+
+    @torch.no_grad()
+    def generate(
+        self,
+        text: torch.Tensor,            # (batch, text_len) int char indices
+        text_mask: torch.Tensor,       # (batch, text_len) float 1=valid 0=pad
+        style_strokes: torch.Tensor,   # (batch, style_len, 3)
+        bias: float = 1.0,
+        max_steps: int = 600,
+    ) -> np.ndarray:                   # (1, seq_len, 3)
+        """
+        Autoregressive generation for batch=1.
+
+        Returns:
+            numpy array of shape (1, total_steps, 3)
+        """
+        self.EOS = False
+
+        text_embeddings = self.text_encoder(text, text_mask)              # (1, text_len, d_model)
+        z, _, _ = self.style_vae(style_strokes, use_sampling=False)       # deterministic at inference
+
+        device = text.device
+        # Start token: zeros (batch=1, seq_len=1, 3)
+        inp = torch.zeros(1, 1, 3, device=device)
+
+        gen_seq = []
+        seq_len = 0
+
+        while seq_len < max_steps:
+            decoder_out = self.stroke_decoder(inp, text_embeddings, text_mask, z)  # (1, seq_so_far, d_model)
+            y_hat = self.mdn_head(decoder_out)                                      # (1, seq_so_far, 121)
+
+            # Take the last time step, squeeze batch dim → (121,)
+            y_hat_last = y_hat[0, -1, :]
+
+            Z = sample_from_out_dist(y_hat_last, bias)   # (1, 1, 3)
+            gen_seq.append(Z)
+            inp = torch.cat([inp, Z], dim=1)             # accumulate along seq dim
+            seq_len += 1
+
+            if Z[0, 0, 0] > 0.5:
+                self.EOS = True
+                break
+
+        # Stack list of (1, 1, 3) tensors → (1, total_steps, 3)
+        result = torch.cat(gen_seq, dim=1)               # (1, total_steps, 3)
+        return result.cpu().numpy()

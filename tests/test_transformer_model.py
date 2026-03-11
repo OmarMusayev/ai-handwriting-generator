@@ -1,7 +1,8 @@
 # tests/test_transformer_model.py
 import torch
 import torch.nn as nn
-from models.transformer_synthesis import TextEncoder, PositionalEncoding, StyleVAE, StrokeDecoder
+from unittest.mock import patch
+from models.transformer_synthesis import TextEncoder, PositionalEncoding, StyleVAE, StrokeDecoder, MDNHead, HandWritingSynthesisTransformer
 
 
 def test_positional_encoding_output_shape():
@@ -166,3 +167,73 @@ def test_stroke_decoder_past_kv_none_works():
         out_none = decoder(strokes, text_embeddings, text_padding_mask, z, past_kv=None)
     assert torch.equal(out_default, out_none), \
         "past_kv=None must produce identical output to calling without past_kv"
+
+
+# --- MDNHead tests ---
+
+def test_mdn_head_output_shape():
+    """MDNHead(decoder_hidden) -> (batch, seq_len, 121)."""
+    mdn = MDNHead(d_model=256)
+    decoder_hidden = torch.randn(3, 10, 256)  # (batch=3, seq_len=10, d_model=256)
+    out = mdn(decoder_hidden)
+    assert out.shape == (3, 10, 121), f"Expected (3, 10, 121), got {out.shape}"
+
+
+# --- HandWritingSynthesisTransformer tests ---
+
+def test_transformer_forward_output_shapes():
+    """forward() returns (y_hat, mu, logvar) with correct shapes."""
+    model = HandWritingSynthesisTransformer(vocab_size=10, d_model=256, nhead=8,
+                                            text_layers=4, dec_layers=6, ff_dim=512,
+                                            latent_dim=64)
+    model.eval()
+    batch, seq_len, text_len, style_len = 2, 15, 8, 10
+    strokes = torch.randn(batch, seq_len, 3)
+    text = torch.randint(0, 10, (batch, text_len))
+    text_mask = torch.ones(batch, text_len)
+    style_strokes = torch.randn(batch, style_len, 3)
+    with torch.no_grad():
+        y_hat, mu, logvar = model(strokes, text, text_mask, style_strokes, use_sampling=True)
+    assert y_hat.shape == (batch, seq_len, 121), f"y_hat shape {y_hat.shape} != ({batch}, {seq_len}, 121)"
+    assert mu.shape == (batch, 64), f"mu shape {mu.shape} != ({batch}, 64)"
+    assert logvar.shape == (batch, 64), f"logvar shape {logvar.shape} != ({batch}, 64)"
+
+
+def test_transformer_generate_returns_numpy_array():
+    """generate() on a 1-sample input returns numpy ndarray with shape (1, T, 3), T > 0."""
+    import numpy as np
+    model = HandWritingSynthesisTransformer(vocab_size=10, d_model=256, nhead=8,
+                                            text_layers=4, dec_layers=6, ff_dim=512,
+                                            latent_dim=64)
+    model.eval()
+    text = torch.randint(0, 10, (1, 5))
+    text_mask = torch.ones(1, 5)
+    style_strokes = torch.randn(1, 8, 3)
+    result = model.generate(text, text_mask, style_strokes, bias=1.0, max_steps=5)
+    assert isinstance(result, np.ndarray), f"Expected numpy ndarray, got {type(result)}"
+    assert result.ndim == 3, f"Expected 3-dim array, got {result.ndim}-dim"
+    assert result.shape[0] == 1, f"Expected batch dim=1, got {result.shape[0]}"
+    assert result.shape[1] > 0, "Expected at least 1 generated step"
+    assert result.shape[2] == 3, f"Expected stroke dim=3, got {result.shape[2]}"
+
+
+def test_transformer_generate_eos_stops_early():
+    """If EOS is sampled on first step, generation stops after 1 step."""
+    import numpy as np
+    model = HandWritingSynthesisTransformer(vocab_size=10, d_model=256, nhead=8,
+                                            text_layers=4, dec_layers=6, ff_dim=512,
+                                            latent_dim=64)
+    model.eval()
+    text = torch.randint(0, 10, (1, 5))
+    text_mask = torch.ones(1, 5)
+    style_strokes = torch.randn(1, 8, 3)
+
+    # Patch sample_from_out_dist to always return EOS=1
+    eos_sample = torch.zeros(1, 1, 3)
+    eos_sample[0, 0, 0] = 1.0  # eos flag = 1
+
+    with patch("models.transformer_synthesis.sample_from_out_dist", return_value=eos_sample):
+        result = model.generate(text, text_mask, style_strokes, bias=1.0, max_steps=50)
+
+    assert isinstance(result, np.ndarray), f"Expected numpy ndarray, got {type(result)}"
+    assert result.shape[1] == 1, f"Expected 1 step (EOS on first step), got {result.shape[1]}"
