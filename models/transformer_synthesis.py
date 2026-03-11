@@ -72,10 +72,10 @@ class StyleVAE(nn.Module):
       - fc_mu:     Linear(512, 64) → μ
       - fc_logvar: Linear(512, 64) → log σ²
 
-    forward(strokes, training=True) → (z, mu, logvar)
+    forward(strokes, use_sampling=True) → (z, mu, logvar)
       - strokes: (batch, seq_len, 3)  [eos, dx, dy]
-      - training=True:  z = μ + σ * ε,  ε ~ N(0, I)  (reparameterization)
-      - training=False: z = μ  (deterministic)
+      - use_sampling=True:  z = μ + σ * ε,  ε ~ N(0, I)  (reparameterization)
+      - use_sampling=False: z = μ  (deterministic)
     """
 
     def __init__(self, input_size: int = 3, hidden_size: int = 256, num_layers: int = 2, latent_dim: int = 64):
@@ -91,11 +91,11 @@ class StyleVAE(nn.Module):
         self.fc_mu = nn.Linear(hidden_size * 2, latent_dim)
         self.fc_logvar = nn.Linear(hidden_size * 2, latent_dim)
 
-    def forward(self, strokes: torch.Tensor, training: bool = True):
+    def forward(self, strokes: torch.Tensor, use_sampling: bool = True):
         """
         Args:
-            strokes:  (batch, seq_len, 3)
-            training: if True, sample via reparameterization; if False, return mu
+            strokes:     (batch, seq_len, 3)
+            use_sampling: if True, sample via reparameterization; if False, return mu
         Returns:
             z:      (batch, latent_dim)
             mu:     (batch, latent_dim)
@@ -111,8 +111,8 @@ class StyleVAE(nn.Module):
         mu = self.fc_mu(h_final)        # (batch, 64)
         logvar = self.fc_logvar(h_final)  # (batch, 64)
 
-        if training:
-            std = torch.exp(0.5 * logvar)
+        if use_sampling:
+            std = torch.exp(0.5 * logvar.clamp(-10, 10))
             eps = torch.randn_like(std)
             z = mu + std * eps
         else:

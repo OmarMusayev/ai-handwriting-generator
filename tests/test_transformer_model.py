@@ -1,5 +1,6 @@
 # tests/test_transformer_model.py
 import torch
+import torch.nn as nn
 from models.transformer_synthesis import TextEncoder, PositionalEncoding, StyleVAE
 
 
@@ -45,21 +46,21 @@ def test_style_vae_output_shapes():
     """z, mu, logvar should all be (batch, 64)."""
     vae = StyleVAE()
     strokes = torch.randn(3, 20, 3)  # (batch=3, seq_len=20, 3)
-    z, mu, logvar = vae(strokes, training=True)
+    z, mu, logvar = vae(strokes, use_sampling=True)
     assert z.shape == (3, 64), f"z shape {z.shape} != (3, 64)"
     assert mu.shape == (3, 64), f"mu shape {mu.shape} != (3, 64)"
     assert logvar.shape == (3, 64), f"logvar shape {logvar.shape} != (3, 64)"
 
 
 def test_style_vae_training_mode_uses_reparameterization():
-    """With training=True, z should differ from mu (sampling adds noise) at least once in 50 runs."""
+    """With use_sampling=True, z should differ from mu (sampling adds noise) at least once in 50 runs."""
     vae = StyleVAE()
-    vae.eval()  # module in eval mode; training flag still controls reparameterization
+    vae.eval()  # module in eval mode; use_sampling flag still controls reparameterization
     strokes = torch.randn(2, 15, 3)
     found_difference = False
     for _ in range(50):
         with torch.no_grad():
-            z, mu, logvar = vae(strokes, training=True)
+            z, mu, logvar = vae(strokes, use_sampling=True)
         if not torch.allclose(z, mu):
             found_difference = True
             break
@@ -72,8 +73,8 @@ def test_style_vae_inference_mode_is_deterministic():
     vae.eval()
     strokes = torch.randn(2, 15, 3)
     with torch.no_grad():
-        z, mu, logvar = vae(strokes, training=False)
-    assert torch.equal(z, mu), "In inference mode (training=False), z must equal mu exactly"
+        z, mu, logvar = vae(strokes, use_sampling=False)
+    assert torch.equal(z, mu), "In inference mode (use_sampling=False), z must equal mu exactly"
 
 
 def test_style_vae_kl_loss_is_non_negative():
@@ -81,6 +82,17 @@ def test_style_vae_kl_loss_is_non_negative():
     vae = StyleVAE()
     strokes = torch.randn(4, 25, 3)
     with torch.no_grad():
-        z, mu, logvar = vae(strokes, training=True)
+        z, mu, logvar = vae(strokes, use_sampling=True)
     kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     assert kl.item() >= 0, f"KL divergence should be non-negative, got {kl.item()}"
+
+
+def test_style_vae_output_is_finite_with_extreme_logvar():
+    """Extreme fc_logvar weights must not produce inf/nan z."""
+    vae = StyleVAE()
+    with torch.no_grad():
+        nn.init.constant_(vae.fc_logvar.weight, 10.0)
+        nn.init.constant_(vae.fc_logvar.bias, 10.0)
+    strokes = torch.randn(2, 15, 3)
+    z, mu, logvar = vae(strokes, use_sampling=True)
+    assert torch.isfinite(z).all(), "z must be finite even with extreme logvar"
