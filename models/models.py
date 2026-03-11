@@ -81,7 +81,7 @@ def sample_batch_from_out_dist(y_hat, bias):
 
     sample = y_hat.new_zeros(batch_size, 1, 3)
     sample[:, 0, 0:1] = eos_sample
-    sample[:, 0, 1:] = Z.squeeze()
+    sample[:, 0, 1:] = Z
     return sample
 
 

@@ -1,7 +1,7 @@
 # tests/test_cholesky_sampling.py
 import torch
 import pytest
-from models.models import sample_from_out_dist
+from models.models import sample_from_out_dist, sample_batch_from_out_dist
 
 
 def _make_y_hat(mu1=0.0, mu2=0.0, std1=1.0, std2=1.0, rho=0.8):
@@ -41,3 +41,14 @@ def test_eos_is_zero_or_one():
     for _ in range(20):
         out = sample_from_out_dist(y_hat, bias=0.0)
         assert out[0, 0, 0].item() in (0.0, 1.0)
+
+
+def test_sample_batch_batch_size_1_no_crash():
+    """batch_size=1 must not crash due to over-squeezing."""
+    torch.manual_seed(0)
+    y_hat = torch.zeros(1, 121)
+    y_hat[0, 1] = 10.0   # dominant component 0
+    y_hat[0, 61] = 0.0   # logstd1 = 0 → std=1
+    y_hat[0, 81] = 0.0   # logstd2 = 0 → std=1
+    out = sample_batch_from_out_dist(y_hat, bias=0.0)
+    assert out.shape == (1, 1, 3)
