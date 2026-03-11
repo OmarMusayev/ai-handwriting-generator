@@ -26,18 +26,19 @@ def sample_from_out_dist(y_hat, bias):
 
     mu_k[0] = mu_1[K]
     mu_k[1] = mu_2[K]
-    cov = y_hat.new_zeros(2, 2)
-    cov[0, 0] = std_1[K].pow(2)
-    cov[1, 1] = std_2[K].pow(2)
-    cov[0, 1], cov[1, 0] = (
-        correlations[K] * std_1[K] * std_2[K],
-        correlations[K] * std_1[K] * std_2[K],
+    # Use Cholesky factor L (lower triangular) where Σ = L @ Lᵀ
+    # L = [[σ₁, 0], [ρσ₂, σ₂√(1-ρ²)]]
+    L = y_hat.new_zeros(2, 2)
+    L[0, 0] = std_1[K]
+    L[1, 0] = correlations[K] * std_2[K]
+    L[1, 1] = std_2[K] * torch.sqrt(
+        torch.clamp(1.0 - correlations[K].pow(2), min=1e-6)
     )
-
-    x = torch.normal(mean=torch.Tensor([0.0, 0.0]), std=torch.Tensor([1.0, 1.0])).to(
-        y_hat.device
+    x = torch.normal(
+        mean=torch.zeros(2, device=y_hat.device),
+        std=torch.ones(2, device=y_hat.device),
     )
-    Z = mu_k + torch.mv(cov, x)
+    Z = mu_k + torch.mv(L, x)
 
     sample = y_hat.new_zeros(1, 1, 3)
     sample[0, 0, 0] = eos_sample.item()
@@ -67,22 +68,16 @@ def sample_batch_from_out_dist(y_hat, bias):
 
     mu_k[:, 0] = mu_1[torch.arange(batch_size), K]
     mu_k[:, 1] = mu_2[torch.arange(batch_size), K]
-    cov = y_hat.new_zeros(y_hat.shape[0], 2, 2)
-    cov[:, 0, 0] = std_1[torch.arange(batch_size), K].pow(2)
-    cov[:, 1, 1] = std_2[torch.arange(batch_size), K].pow(2)
-    cov[:, 0, 1], cov[:, 1, 0] = (
-        correlations[torch.arange(batch_size), K]
-        * std_1[torch.arange(batch_size), K]
-        * std_2[torch.arange(batch_size), K],
-        correlations[torch.arange(batch_size), K]
-        * std_1[torch.arange(batch_size), K]
-        * std_2[torch.arange(batch_size), K],
+    # Use Cholesky factor L (lower triangular) where Σ = L @ Lᵀ
+    idx = torch.arange(batch_size)
+    L = y_hat.new_zeros(batch_size, 2, 2)
+    L[:, 0, 0] = std_1[idx, K]
+    L[:, 1, 0] = correlations[idx, K] * std_2[idx, K]
+    L[:, 1, 1] = std_2[idx, K] * torch.sqrt(
+        torch.clamp(1.0 - correlations[idx, K].pow(2), min=1e-6)
     )
-
-    X = torch.normal(
-        mean=torch.zeros(batch_size, 2, 1), std=torch.ones(batch_size, 2, 1)
-    ).to(y_hat.device)
-    Z = mu_k + torch.matmul(cov, X).squeeze()
+    X = torch.randn(batch_size, 2, 1, device=y_hat.device)
+    Z = mu_k + torch.matmul(L, X).squeeze(-1)
 
     sample = y_hat.new_zeros(batch_size, 1, 3)
     sample[:, 0, 0:1] = eos_sample
