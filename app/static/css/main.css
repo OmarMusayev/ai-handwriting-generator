@@ -517,7 +517,7 @@ input[type="text"], .text-input, #draw-canvas,
   display: none;
 }
 
-/* Logo: same size, black text, no gradient/glow */
+/* Logo: visually matched size, black text, no gradient/glow */
 [data-theme="minimal"] .logo {
   background: none;
   -webkit-background-clip: unset;
@@ -527,7 +527,8 @@ input[type="text"], .text-input, #draw-canvas,
   filter: none;
   font-family: 'Inter', sans-serif;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  font-size: 1.6rem;
+  letter-spacing: 0.02em;
 }
 
 /* Cards: flat white, thin gray border */
