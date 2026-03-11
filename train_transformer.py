@@ -309,3 +309,144 @@ def load_checkpoint(
     optimizer.load_state_dict(checkpoint["optimizer_state"])
     scheduler.load_state_dict(checkpoint["scheduler_state"])
     return checkpoint["epoch"], checkpoint["best_val_loss"], checkpoint["beta"]
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+def argparser():
+    import argparse
+    p = argparse.ArgumentParser(description="Train the Transformer + Style VAE model")
+    p.add_argument("--data_path", type=str, default="./data/")
+    p.add_argument("--checkpoint_dir", type=str, default="checkpoints/transformer/")
+    p.add_argument("--epochs", type=int, default=100)
+    p.add_argument("--batch_size", type=int, default=32)
+    p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--weight_decay", type=float, default=1e-4)
+    p.add_argument("--grad_clip", type=float, default=1.0)
+    p.add_argument("--max_stroke_len", type=int, default=1000)
+    p.add_argument("--resume", action="store_true", help="Resume from checkpoint_latest.pt")
+    p.add_argument("--bias", type=float, default=1.0, help="Sampling bias for mid-epoch generation")
+    return p.parse_args()
+
+
+def main():
+    args = argparser()
+
+    # Device: prefer MPS (M-series Mac), fallback CPU
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    print(f"Using device: {device}")
+
+    # Load data
+    strokes = np.load(os.path.join(args.data_path, "strokes.npy"), allow_pickle=True)
+    with open(os.path.join(args.data_path, "sentences.txt")) as f:
+        raw_texts = f.read().splitlines()
+
+    # Build vocab from all characters in training texts
+    all_chars = sorted(set("".join(raw_texts)))
+    char_to_id = {c: i for i, c in enumerate(all_chars)}
+    vocab_size = len(char_to_id)
+    texts = np.array([np.array(list(t)) for t in raw_texts], dtype=object)
+
+    # Train/valid split (90/10, same as existing pipeline)
+    n = len(strokes)
+    n_train = int(0.9 * n)
+    idx = np.random.permutation(n)
+    train_idx, valid_idx = idx[:n_train], idx[n_train:]
+
+    # Compute train_mean, train_std from training strokes
+    train_strokes_raw = [strokes[i].astype(np.float32) for i in train_idx]
+    all_offsets = np.concatenate([s[:, 1:] for s in train_strokes_raw], axis=0)
+    train_mean = all_offsets.mean(axis=0)  # shape (2,)
+    train_std  = all_offsets.std(axis=0).clip(min=1e-6)
+
+    train_ds = TransformerHandwritingDataset(
+        strokes=strokes[train_idx],
+        texts=texts[train_idx],
+        char_to_id=char_to_id,
+        train_mean=train_mean,
+        train_std=train_std,
+        max_stroke_len=args.max_stroke_len,
+    )
+    valid_ds = TransformerHandwritingDataset(
+        strokes=strokes[valid_idx],
+        texts=texts[valid_idx],
+        char_to_id=char_to_id,
+        train_mean=train_mean,
+        train_std=train_std,
+        max_stroke_len=args.max_stroke_len,
+    )
+
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
+                              collate_fn=collate_fn, num_workers=0)
+    valid_loader = DataLoader(valid_ds, batch_size=args.batch_size, shuffle=False,
+                              collate_fn=collate_fn, num_workers=0)
+
+    # Model
+    model = HandWritingSynthesisTransformer(vocab_size=vocab_size).to(device)
+
+    # Optimizer + scheduler
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+
+    start_epoch = 0
+    best_val_loss = float("inf")
+
+    # Resume
+    latest_path = os.path.join(args.checkpoint_dir, "checkpoint_latest.pt")
+    if args.resume and os.path.exists(latest_path):
+        start_epoch, best_val_loss, _ = load_checkpoint(latest_path, model, optimizer, scheduler, device)
+        start_epoch += 1
+        print(f"Resumed from epoch {start_epoch - 1}")
+
+    # Training loop
+    for epoch in range(start_epoch, args.epochs):
+        beta = get_beta(epoch)
+
+        train_loss = train_epoch(model, train_loader, optimizer, device, beta, args.grad_clip)
+        val_loss   = validation_epoch(model, valid_loader, device, beta)
+        scheduler.step()
+
+        print(f"Epoch {epoch:3d} | beta={beta:.3f} | train={train_loss:.4f} | val={val_loss:.4f}")
+
+        # Save latest checkpoint every epoch
+        save_checkpoint(
+            {
+                "epoch": epoch,
+                "model_state": model.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "scheduler_state": scheduler.state_dict(),
+                "best_val_loss": best_val_loss,
+                "beta": beta,
+            },
+            latest_path,
+        )
+
+        # Save best checkpoint
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_path = os.path.join(args.checkpoint_dir, "checkpoint_best.pt")
+            save_checkpoint(
+                {
+                    "epoch": epoch,
+                    "model_state": model.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
+                    "scheduler_state": scheduler.state_dict(),
+                    "best_val_loss": best_val_loss,
+                    "beta": beta,
+                },
+                best_path,
+            )
+            print(f"  → New best: {best_val_loss:.4f}")
+
+    print("Training complete.")
+
+
+if __name__ == "__main__":
+    main()

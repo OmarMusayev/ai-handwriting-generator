@@ -14,6 +14,7 @@ from train_transformer import (
     validation_epoch,
     save_checkpoint,
     load_checkpoint,
+    argparser,
 )
 
 
@@ -380,3 +381,103 @@ def test_validation_epoch_no_grad():
     assert all_same, "validation_epoch should not modify model weights"
     assert isinstance(val_loss, float)
     assert np.isfinite(val_loss)
+
+
+# ---------------------------------------------------------------------------
+# Task 8 Tests
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Test 10: get_beta exact boundary values
+# ---------------------------------------------------------------------------
+
+def test_get_beta_at_boundary_epochs():
+    # epoch=20 is exactly the first epoch of the linear ramp
+    # stage2_start=20, stage2_end=60 → (20-20)/(60-20) = 0/40 = 0.0
+    assert get_beta(20) == pytest.approx(0.0)
+    # epoch=21 → (21-20)/(60-20) = 1/40
+    assert get_beta(21) == pytest.approx(1 / 40)
+    # epoch=19 should still be 0.0 (below ramp start)
+    assert get_beta(19) == pytest.approx(0.0)
+    # epoch=60 should be 1.0 (at ramp end)
+    assert get_beta(60) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Test 11: argparser defaults
+# ---------------------------------------------------------------------------
+
+def test_argparser_defaults(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["train_transformer.py"])
+    args = argparser()
+    assert args.data_path == "./data/"
+    assert args.checkpoint_dir == "checkpoints/transformer/"
+    assert args.epochs == 100
+    assert args.batch_size == 32
+    assert args.lr == pytest.approx(1e-3)
+    assert args.weight_decay == pytest.approx(1e-4)
+    assert args.grad_clip == pytest.approx(1.0)
+    assert args.max_stroke_len == 1000
+    assert args.resume is False
+    assert args.bias == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Test 12: main() smoke test with mocked data
+# ---------------------------------------------------------------------------
+
+def test_main_smoke_with_mock_data(monkeypatch, tmp_path):
+    """Run main() for 1 epoch with 5 tiny strokes, all data mocked."""
+    import sys
+    import io
+    import builtins
+    from unittest.mock import patch, MagicMock
+
+    # Build 20 synthetic strokes each of shape (50, 3).
+    # 20 strokes → 18 train, 2 valid; batch_size=2 avoids the batch-size-1 squeeze
+    # bug in compute_nll_loss (pre-existing, unrelated to this task).
+    rng = np.random.default_rng(0)
+    n_mock = 20
+    mock_strokes = np.empty(n_mock, dtype=object)
+    base_sentences = ["hello world", "foo bar", "test abc", "quick fox", "lazy dog"]
+    for i in range(n_mock):
+        s = np.zeros((50, 3), dtype=np.float32)
+        s[:, 0] = rng.integers(0, 2, size=50).astype(np.float32)
+        s[:, 1:] = rng.standard_normal((50, 2)).astype(np.float32)
+        mock_strokes[i] = s
+
+    sentences = [base_sentences[i % len(base_sentences)] for i in range(n_mock)]
+
+    # Checkpoint dir in tmp_path so we don't write to the real repo
+    ckpt_dir = str(tmp_path / "checkpoints" / "transformer")
+
+    # Patch sys.argv
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "train_transformer.py",
+            "--epochs", "1",
+            "--batch_size", "2",
+            "--checkpoint_dir", ckpt_dir,
+            "--data_path", str(tmp_path),
+        ],
+    )
+
+    # Write a real sentences.txt so open() works
+    sentences_file = tmp_path / "sentences.txt"
+    sentences_file.write_text("\n".join(sentences))
+
+    # Mock np.load to return our synthetic strokes
+    real_np_load = np.load
+
+    def mock_np_load(path, **kwargs):
+        if "strokes.npy" in str(path):
+            return mock_strokes
+        return real_np_load(path, **kwargs)
+
+    from train_transformer import main
+    with patch("numpy.load", side_effect=mock_np_load):
+        main()  # should complete without error
+
+    # Verify checkpoint was written
+    assert os.path.exists(os.path.join(ckpt_dir, "checkpoint_latest.pt"))
