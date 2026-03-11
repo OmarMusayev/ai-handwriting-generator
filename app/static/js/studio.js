@@ -18,7 +18,7 @@
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
     ctx.scale(dpr, dpr);
-    ctx.strokeStyle = "#ffffff";
+    ctx.strokeStyle = document.documentElement.getAttribute('data-theme') === 'minimal' ? '#0a0a0a' : '#ffffff';
     ctx.lineWidth = 2.5;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -38,12 +38,17 @@
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
+  function inkColor() {
+    return document.documentElement.getAttribute('data-theme') === 'minimal' ? '#0a0a0a' : '#ffffff';
+  }
+
   function startDraw(e) {
     e.preventDefault();
     isDrawing = true;
     const { x, y } = getPos(e);
     lastX = x; lastY = y;
     currentStroke = [{ x, y, eos: 0 }];
+    ctx.strokeStyle = inkColor();
     ctx.beginPath();
     ctx.moveTo(x, y);
   }
