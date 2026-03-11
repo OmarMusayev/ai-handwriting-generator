@@ -11,7 +11,6 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.session import get_or_create_session
-from app.xml_parser import path_string_to_stroke
 from utils import plot_stroke
 
 router = APIRouter()
@@ -33,7 +32,7 @@ def _next_name(token: str) -> str:
 
 
 class SaveStyleRequest(BaseModel):
-    path: str
+    stroke_data: list   # [[eos, dx, dy], ...]  already converted by the canvas JS
     priming_text: str = ""
 
 
@@ -69,8 +68,8 @@ async def save_style(body: SaveStyleRequest, request: Request, response: Respons
     token = get_or_create_session(request, response)
     if _count_styles(token) >= settings.max_styles_per_session:
         raise HTTPException(status_code=400, detail="Maximum styles reached")
-    if not body.path.strip():
-        raise HTTPException(status_code=400, detail="Empty path data")
+    if not body.stroke_data:
+        raise HTTPException(status_code=400, detail="Empty stroke data")
 
     style_id = str(uuid.uuid4())
     # Compute name BEFORE creating the directory so _count_styles is not off by one
@@ -79,9 +78,10 @@ async def save_style(body: SaveStyleRequest, request: Request, response: Respons
     sd.mkdir(parents=True, exist_ok=True)
 
     priming_text = body.priming_text or "hello"
-    stroke = path_string_to_stroke(body.path, str_len=max(len(priming_text), 1))
+    # stroke_data is [[eos, dx, dy], ...] — convert directly to float32 array
+    stroke = np.array(body.stroke_data, dtype=np.float32)
     np.save(str(sd / "stroke.npy"), stroke, allow_pickle=True)
-    plot_stroke(stroke.astype(np.float32), str(sd / "preview.png"))
+    plot_stroke(stroke, str(sd / "preview.png"))
 
     meta = {
         "name": next_name,

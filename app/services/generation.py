@@ -4,7 +4,7 @@ import numpy as np
 from pathlib import Path
 
 from utils import plot_stroke
-from utils.data_utils import valid_offset_normalization, data_denormalization
+from utils.data_utils import data_denormalization
 from generate import generate_conditional_sequence
 from app.core.singletons import ModelSingleton, VocabSingleton, StatsSingleton
 from app.services.job_store import create_job, mark_sample_done, complete_job, fail_job
@@ -33,8 +33,10 @@ def run_generation_job(
             str(style_path), allow_pickle=True, encoding="bytes"
         ).astype(np.float32)
 
-        # FIX: normalize with GLOBAL training stats, not local style stats
-        style_norm = valid_offset_normalization(train_mean, train_std, style.copy())
+        # Normalize with GLOBAL training stats (style is 2D: T×3)
+        style_norm = style.copy()
+        style_norm[:, 1:] -= train_mean
+        style_norm[:, 1:] /= train_std
         style_tensor = torch.from_numpy(style_norm).unsqueeze(0).to(device)
 
         for i in range(n_samples):

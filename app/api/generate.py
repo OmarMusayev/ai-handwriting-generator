@@ -16,7 +16,7 @@ router = APIRouter()
 
 class GenerateRequest(BaseModel):
     text: str
-    style_id: str
+    style_id: str = "default"
     bias: float = 5.0
 
 

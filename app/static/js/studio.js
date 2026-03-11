@@ -107,8 +107,7 @@
       return;
     }
     const offsets = pointsToOffsets(strokes);
-    // Build priming text from canvas (use empty string; server uses default)
-    const primedText = "";
+    const primedText = (document.getElementById("priming-text") || {}).value || "";
 
     const btn = document.getElementById("btn-save");
     btn.disabled = true;
