@@ -15,7 +15,7 @@ from app.api import styles, generate, jobs
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    startup_singletons(settings.data_path, settings.model_path, device)
+    startup_singletons(settings.data_path, settings.model_path, device, settings.model_type)
     cleanup_old_sessions()
     yield
 

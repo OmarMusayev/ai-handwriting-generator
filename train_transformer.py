@@ -229,7 +229,7 @@ def train_epoch(
     total_loss = 0.0
     num_batches = 0
 
-    it = tqdm(loader, desc="train", leave=False) if use_tqdm else loader
+    it = tqdm(loader, desc="train", leave=False, mininterval=2.0, dynamic_ncols=True) if use_tqdm else loader
 
     for batch in it:
         # Move tensors to device
@@ -333,6 +333,68 @@ def load_checkpoint(
 
 
 # ---------------------------------------------------------------------------
+# DeepWriting dataset loader
+# ---------------------------------------------------------------------------
+
+def load_deepwriting(deepwriting_path: str, iam_strokes: np.ndarray) -> tuple:
+    """Load DeepWriting .npz files, convert to IAM format, and return merged arrays.
+
+    DeepWriting format: (dx, dy, pen_up) — already pre-normalized
+    IAM format:         (eos, dx, dy)    — raw offsets in tablet units
+
+    Steps:
+      1. Denormalize DeepWriting dx/dy using their stored mean/std
+      2. Rescale to IAM coordinate space using std ratio
+      3. Reorder columns to (pen_up, dx, dy)
+      4. Concatenate with IAM strokes + texts
+
+    Returns:
+        (merged_strokes, merged_texts) as object arrays
+    """
+    import os
+
+    # Compute IAM dx/dy std for rescaling (use all strokes)
+    iam_offsets = np.concatenate([s[:, 1:].astype(np.float32) for s in iam_strokes], axis=0)
+    iam_std = iam_offsets.std(axis=0).clip(min=1e-6)  # shape (2,)
+
+    all_dw_strokes = []
+    all_dw_texts = []
+
+    for split in ["training", "validation"]:
+        path = os.path.join(deepwriting_path, f"deepwriting_{split}.npz")
+        if not os.path.exists(path):
+            print(f"  Warning: {path} not found, skipping")
+            continue
+        d = np.load(path, allow_pickle=True)
+        dw_strokes = d["strokes"]   # object array of (T, 3): (dx, dy, pen_up), normalized
+        dw_texts = d["texts"]       # string array of shape (N,)
+        dw_mean = d["mean"][:2].astype(np.float32)  # (2,) dx/dy mean
+        dw_std  = d["std"][:2].astype(np.float32)   # (2,) dx/dy std
+
+        # Scale factor to match IAM units
+        scale = iam_std / dw_std.clip(min=1e-6)  # (2,)
+
+        for s, t in zip(dw_strokes, dw_texts):
+            s = s.astype(np.float32)
+            # Denormalize dx/dy
+            s[:, :2] = s[:, :2] * dw_std + dw_mean
+            # Rescale to IAM coordinate space
+            s[:, :2] *= scale
+            # Reorder: (dx, dy, pen_up) → (pen_up, dx, dy)
+            s = np.stack([s[:, 2], s[:, 0], s[:, 1]], axis=1)
+            # Ensure last point marks end of sequence (match IAM convention)
+            s[-1, 0] = 1.0
+            all_dw_strokes.append(s)
+            all_dw_texts.append(list(str(t)))
+
+    dw_strokes_arr = np.array(all_dw_strokes, dtype=object)
+    dw_texts_arr   = np.array([np.array(t) for t in all_dw_texts], dtype=object)
+
+    print(f"  DeepWriting: loaded {len(dw_strokes_arr)} samples from {deepwriting_path}")
+    return dw_strokes_arr, dw_texts_arr
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -347,6 +409,7 @@ def argparser():
     p.add_argument("--weight_decay", type=float, default=1e-4)
     p.add_argument("--grad_clip", type=float, default=1.0)
     p.add_argument("--max_stroke_len", type=int, default=1000)
+    p.add_argument("--deepwriting_path", type=str, default=None, help="Path to deepwriting_dataset/ folder to merge with IAM data")
     p.add_argument("--resume", action="store_true", help="Resume from checkpoint_latest.pt")
     p.add_argument("--bias", type=float, default=1.0, help="Sampling bias for mid-epoch generation")
     p.add_argument("--tqdm", action="store_true", help="Show per-batch progress bar with loss and GPU memory")
@@ -369,12 +432,20 @@ def main():
     strokes = np.load(os.path.join(args.data_path, "strokes.npy"), allow_pickle=True, encoding="bytes")
     with open(os.path.join(args.data_path, "sentences.txt")) as f:
         raw_texts = f.read().splitlines()
+    texts = np.array([np.array(list(t)) for t in raw_texts], dtype=object)
+
+    # Optionally merge DeepWriting dataset
+    if args.deepwriting_path:
+        print(f"Loading DeepWriting dataset from {args.deepwriting_path} ...")
+        dw_strokes, dw_texts = load_deepwriting(args.deepwriting_path, strokes)
+        strokes = np.concatenate([strokes, dw_strokes])
+        texts   = np.concatenate([texts, dw_texts])
+        print(f"  Combined dataset: {len(strokes)} samples (IAM + DeepWriting)")
 
     # Build vocab from all characters in training texts
-    all_chars = sorted(set("".join(raw_texts)))
+    all_chars = sorted(set(c for t in texts for c in t))
     char_to_id = {c: i for i, c in enumerate(all_chars)}
     vocab_size = len(char_to_id)
-    texts = np.array([np.array(list(t)) for t in raw_texts], dtype=object)
 
     # Train/valid split (90/10, same as existing pipeline)
     n = len(strokes)
@@ -425,6 +496,9 @@ def main():
     if args.resume and os.path.exists(latest_path):
         start_epoch, best_val_loss, _ = load_checkpoint(latest_path, model, optimizer, scheduler, device)
         start_epoch += 1
+        # Reset scheduler so LR anneals over the remaining epochs, not the original run
+        remaining = max(args.epochs - start_epoch, 1)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=remaining)
         print(f"Resumed from epoch {start_epoch - 1}")
 
     # Training loop
@@ -435,7 +509,8 @@ def main():
         val_loss   = validation_epoch(model, valid_loader, device, beta)
         scheduler.step()
 
-        print(f"Epoch {epoch:3d} | beta={beta:.3f} | train={train_loss:.4f} | val={val_loss:.4f}")
+        _log = print if not args.tqdm else __import__("tqdm").tqdm.write
+        _log(f"Epoch {epoch:3d} | beta={beta:.3f} | train={train_loss:.4f} | val={val_loss:.4f}")
 
         # Save latest checkpoint every epoch
         save_checkpoint(
@@ -446,6 +521,8 @@ def main():
                 "scheduler_state": scheduler.state_dict(),
                 "best_val_loss": best_val_loss,
                 "beta": beta,
+                "train_mean": train_mean,
+                "train_std": train_std,
             },
             latest_path,
         )
@@ -462,10 +539,12 @@ def main():
                     "scheduler_state": scheduler.state_dict(),
                     "best_val_loss": best_val_loss,
                     "beta": beta,
+                    "train_mean": train_mean,
+                    "train_std": train_std,
                 },
                 best_path,
             )
-            print(f"  → New best: {best_val_loss:.4f}")
+            _log(f"  → New best: {best_val_loss:.4f}")
 
     print("Training complete.")
 

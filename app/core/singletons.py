@@ -76,6 +76,10 @@ class ModelSingleton:
                 model = HandWritingSynthesisTransformer(vocab_size=vocab_size)
                 checkpoint = torch.load(model_path, map_location=device)
                 model.load_state_dict(checkpoint["model_state"])
+                # Override global stats with the exact stats used during training
+                if "train_mean" in checkpoint and "train_std" in checkpoint:
+                    StatsSingleton.train_mean = checkpoint["train_mean"]
+                    StatsSingleton.train_std = checkpoint["train_std"]
             else:
                 model = HandWritingSynthesisNet(window_size=vocab_size)
                 state_dict = torch.load(model_path, map_location=device)

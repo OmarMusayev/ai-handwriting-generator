@@ -116,3 +116,12 @@ webroot/
 # Claude / Superpowers (local dev only)
 .superpowers/
 docs/superpowers/
+# Virtual environment
+hand_gen_env/
+# Runtime / session data
+disk/
+# Large binary datasets (upload to RunPod manually)
+deepwriting_dataset/
+deepwriting_dataset.zip
+# Model checkpoints (too large for GitHub)
+checkpoints/
