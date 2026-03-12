@@ -410,6 +410,7 @@ def argparser():
     p.add_argument("--grad_clip", type=float, default=1.0)
     p.add_argument("--max_stroke_len", type=int, default=1000)
     p.add_argument("--deepwriting_path", type=str, default=None, help="Path to deepwriting_dataset/ folder to merge with IAM data")
+    p.add_argument("--gdrive_folder_id", type=str, default=None, help="Google Drive folder name (rclone remote path) to auto-backup best checkpoints")
     p.add_argument("--resume", action="store_true", help="Resume from checkpoint_latest.pt")
     p.add_argument("--bias", type=float, default=1.0, help="Sampling bias for mid-epoch generation")
     p.add_argument("--tqdm", action="store_true", help="Show per-batch progress bar with loss and GPU memory")
@@ -545,6 +546,17 @@ def main():
                 best_path,
             )
             _log(f"  → New best: {best_val_loss:.4f}")
+            if args.gdrive_folder_id:
+                try:
+                    import subprocess
+                    subprocess.Popen([
+                        "rclone", "copy", best_path,
+                        f"gdrive:{args.gdrive_folder_id}",
+                        "--drive-use-trash=false"
+                    ])
+                    _log("  → Uploading to Google Drive...")
+                except Exception as e:
+                    _log(f"  → Drive upload failed: {e}")
 
     print("Training complete.")
 
