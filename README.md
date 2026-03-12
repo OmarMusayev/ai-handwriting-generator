@@ -82,9 +82,16 @@ Checkpoint: `checkpoints/transformer/checkpoint_best.pt`
 
 ### Hardware
 
+**Cloud (Transformer model — current):**
+- **Training machine:** RunPod H100 SXM 80GB
+- **GPU:** NVIDIA H100 SXM, 80GB HBM3, 700W TDP
+- **Training speed:** ~2.7 it/s at batch_size=256, max_stroke_len=1000 (~20 min/epoch)
+- **300 epochs:** ~4 hours total
+
+**Local (LSTM model / prototyping):**
 - **Training machine:** Apple MacBook Pro M4 Max, 48GB unified RAM
 - **GPU:** Apple MPS (Metal Performance Shaders — Apple Silicon integrated GPU)
-- **Training speed:** ~2–3 it/s at batch_size=8, max_stroke_len=1000
+- **Training speed:** ~2–3 it/s at batch_size=8, max_stroke_len=1000 (~31 min/epoch)
 
 ### Data
 
