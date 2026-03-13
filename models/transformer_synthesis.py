@@ -335,10 +335,10 @@ class HandWritingSynthesisTransformer(nn.Module):
         """
         Autoregressive generation for batch=1.
 
-        Starts decoder from style_strokes (matches training distribution where
-        decoder input begins at the style/target split point).
+        Starts decoder from SOS token [1,0,0] matching collate_fn training input.
+        Style strokes are only used by the StyleVAE to encode z.
 
-        EOS flag means pen-lift, not end-of-sequence. Generation runs for
+        EOS flag means pen-lift (not end-of-sequence), so generation runs for
         max_steps rather than stopping on the first pen-lift.
 
         Returns:

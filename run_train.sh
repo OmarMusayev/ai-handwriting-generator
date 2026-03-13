@@ -1,5 +1,9 @@
 #!/bin/bash
 # Overnight test run — IAM only, 50 epochs, M4 Mac
+# Activate venv if not already active
+if [ -z "$VIRTUAL_ENV" ]; then
+  source hand_gen_env/bin/activate
+fi
 python train_transformer.py \
   --epochs 50 \
   --batch_size 8 \

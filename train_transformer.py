@@ -297,7 +297,7 @@ def validation_epoch(
             text_mask = batch["text_mask"].to(device)
 
             y_hat, mu, logvar = model(
-                target_strokes_input, text, text_mask, style_strokes, use_sampling=True
+                target_strokes_input, text, text_mask, style_strokes, use_sampling=False
             )
 
             loss, _, _ = compute_loss(y_hat, target_strokes, target_mask, mu, logvar, beta)
