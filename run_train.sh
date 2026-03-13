@@ -12,6 +12,9 @@ python train_transformer.py \
   --warmup_steps 500 \
   --kl_start 10 \
   --kl_end 35 \
+  --deepwriting_path deepwriting_dataset/ \
+  --deepwriting_only \
+  --max_samples 20000 \
   --checkpoint_dir checkpoints/transformer_v2/ \
   --tqdm \
   --no_amp

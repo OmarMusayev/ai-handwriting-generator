@@ -468,6 +468,8 @@ def argparser():
     p.add_argument("--kl_end", type=int, default=35, help="Epoch where KL weight reaches 1.0")
     p.add_argument("--max_stroke_len", type=int, default=1000)
     p.add_argument("--deepwriting_path", type=str, default=None, help="Path to deepwriting_dataset/ folder to merge with IAM data")
+    p.add_argument("--deepwriting_only", action="store_true", help="Use DeepWriting dataset only, skip IAM")
+    p.add_argument("--max_samples", type=int, default=None, help="Cap total dataset size (random subsample)")
     p.add_argument("--gdrive_folder_id", type=str, default=None, help="Google Drive folder name (rclone remote path) to auto-backup best checkpoints")
     p.add_argument("--num_workers", type=int, default=0, help="DataLoader workers (0 for MPS, 4-8 for CUDA)")
     p.add_argument("--resume", action="store_true", help="Resume from checkpoint_latest.pt")
@@ -494,18 +496,33 @@ def main():
     print(f"Using device: {device}")
 
     # Load data
-    strokes = np.load(os.path.join(args.data_path, "strokes.npy"), allow_pickle=True, encoding="bytes")
-    with open(os.path.join(args.data_path, "sentences.txt")) as f:
-        raw_texts = f.read().splitlines()
-    texts = np.array([np.array(list(t)) for t in raw_texts], dtype=object)
+    if args.deepwriting_only:
+        if not args.deepwriting_path:
+            raise ValueError("--deepwriting_only requires --deepwriting_path")
+        print(f"Loading DeepWriting dataset only from {args.deepwriting_path} ...")
+        _dummy = np.load(os.path.join(args.data_path, "strokes.npy"), allow_pickle=True, encoding="bytes")
+        strokes, texts = load_deepwriting(args.deepwriting_path, _dummy)
+        del _dummy
+        print(f"  DeepWriting only: {len(strokes)} samples")
+    else:
+        strokes = np.load(os.path.join(args.data_path, "strokes.npy"), allow_pickle=True, encoding="bytes")
+        with open(os.path.join(args.data_path, "sentences.txt")) as f:
+            raw_texts = f.read().splitlines()
+        texts = np.array([np.array(list(t)) for t in raw_texts], dtype=object)
 
-    # Optionally merge DeepWriting dataset
-    if args.deepwriting_path:
-        print(f"Loading DeepWriting dataset from {args.deepwriting_path} ...")
-        dw_strokes, dw_texts = load_deepwriting(args.deepwriting_path, strokes)
-        strokes = np.concatenate([strokes, dw_strokes])
-        texts   = np.concatenate([texts, dw_texts])
-        print(f"  Combined dataset: {len(strokes)} samples (IAM + DeepWriting)")
+        if args.deepwriting_path:
+            print(f"Loading DeepWriting dataset from {args.deepwriting_path} ...")
+            dw_strokes, dw_texts = load_deepwriting(args.deepwriting_path, strokes)
+            strokes = np.concatenate([strokes, dw_strokes])
+            texts   = np.concatenate([texts, dw_texts])
+            print(f"  Combined dataset: {len(strokes)} samples (IAM + DeepWriting)")
+
+    # Optionally cap dataset size
+    if args.max_samples and len(strokes) > args.max_samples:
+        idx_sub = np.random.choice(len(strokes), args.max_samples, replace=False)
+        strokes = strokes[idx_sub]
+        texts   = texts[idx_sub]
+        print(f"  Subsampled to {len(strokes)} samples")
 
     # Build vocab from all characters in training texts
     all_chars = sorted(set(c for t in texts for c in t))
